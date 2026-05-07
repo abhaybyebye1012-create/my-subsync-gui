@@ -16,76 +16,70 @@ jobs:
     - name: Install System Dependencies
       run: |
         sudo apt-get update
-        # Install dev tools needed to compile Python packages
         sudo apt-get install -y python3-dev python3-tk patchelf wget curl unzip xdg-utils build-essential gcc g++
 
-    - name: Download Linuxdeploy & Plugin (FIXED URL)
+    - name: Download Linuxdeploy & Plugin
       run: |
-        # 1. Download the core linuxdeploy tool (Continuous build)
+        # 1. Core tool
         wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
         chmod +x linuxdeploy-x86_64.AppImage
         
-        # 2. Download the FIXED Python Plugin (Using 'continuous' tag to avoid 404)
-        wget -O linuxdeploy-plugin-python-x86_64.AppImage https://github.com/niess/linuxdeploy-plugin-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage
+        # 2. Python Plugin (Official Continuous Build)
+        wget -O linuxdeploy-plugin-python-x86_64.AppImage https://github.com/linuxdeploy/plugin-script-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage
         chmod +x linuxdeploy-plugin-python-x86_64.AppImage
         
-        # 3. Move plugin to 'root' directory so linuxdeploy discovers it automatically
+        # 3. Place plugin in 'root' folder so linuxdeploy auto-detects '--plugin python'
         mkdir -p root
         mv linuxdeploy-plugin-python-x86_64.AppImage root/linuxdeploy-plugin-python-x86_64.AppImage
 
     - name: Install Python Libraries (Stable Config)
       run: |
-        # Pin Numpy < 2.0 to fix the TensorFlow/PyTorch resolution errors you saw earlier
+        # Prevent TensorFlow/Numpy resolution conflicts
         pip install "numpy<2.0"
         
-        # Install CPU-only PyTorch to save space and avoid driver issues
+        # CPU-only PyTorch (Standardizes env, avoids GPU driver errors)
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         
-        # Install the application itself
+        # Main application dependencies
         pip install ffsubsync requests
 
     - name: Download & Extract Static FFmpeg
       run: |
-        # Download the static build
-        wget -qO archive.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+        wget -qO ffmpeg_archive.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+        mkdir -p ext && tar xf ffmpeg_archive.tar.xz -C ext --strip-components=1
+        rm -f ffmpeg_archive.tar.xz
         
-        # Extract into a temp folder
-        mkdir -p ext && tar xf archive.tar.xz -C ext --strip-components=1
-        
-        # Robust copy: check if it's in bin/ or root, then copy to project root
+        # Robust extraction & cleanup
         if [ -f ext/bin/ffmpeg ]; then
           cp ext/bin/ffmpeg .
         else
           cp ext/ffmpeg .
         fi
-        
-        # Cleanup
-        rm -rf ext archive.tar.xz
         chmod +x ffmpeg
+        rm -rf ext
 
     - name: Prepare Desktop File & Icons
       run: |
         mkdir -p files/usr/share/applications files/usr/share/icons/hicolor/128x128/apps
         
-        # Create .desktop file
         printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > files/desktop_file.desktop
         
-        # Download icon (ignore error if network is slow)
         wget -q -O files/icon.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
 
     - name: Build AppImage
       run: |
         mkdir -p AppDir/usr/bin
         
-        # CRITICAL: Inject our bundled FFmpeg into the AppImage internals
+        # 1. Inject static FFmpeg
         cp ./ffmpeg AppDir/usr/bin/ffmpeg
         
-        # Copy Main Script into the AppDir so the python plugin can bundle it
+        # 2. Place main script in standard location for python plugin
         cp ./main.py AppDir/usr/bin/main.py
+        chmod +x AppDir/usr/bin/main.py
         
-        # Run the builder
-        # FIX: Removed '--executable main.py' because it is a text file, not a binary.
-        # The Python plugin handles bundling and execution of .py scripts.
+        # 3. Run builder
+        # NOTE: Removed '--executable main.py' to avoid ELF parsing crash.
+        # The python plugin auto-discovers *.py in AppDir/usr/bin/ when invoked with '--plugin python'.
         ./linuxdeploy-x86_64.AppImage \
           --appdir AppDir \
           --icon-file files/icon.png \
