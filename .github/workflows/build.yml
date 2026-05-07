@@ -1,4 +1,4 @@
-name: Build Standalone AppImage (Conda Plugin Fix)
+name: Build Standalone AppImage (Manual Conda Fix)
 
 on:
   push:
@@ -16,82 +16,91 @@ jobs:
     - name: Install System Dependencies
       run: |
         sudo apt-get update
-        # Essential tools for building wheels and AppImages
-        sudo apt-get install -y python3-dev python3-tk patchelf wget curl unzip xdg-utils build-essential gcc g++ libgl1-mesa-glx
+        # Tools needed to compile python packages and build appimages
+        sudo apt-get install -y python3-dev python3-tk patchelf wget curl unzip xdg-utils build-essential gcc g++
 
-    - name: Download Linuxdeploy & Official Conda Plugin (FIXED URL)
+    - name: Download Linuxdeploy (Core Tool Only)
       run: |
-        # 1. Core tool
+        # Download ONLY the core tool (this one works)
         wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
         chmod +x linuxdeploy-x86_64.AppImage
         
-        # 2. Official Python/Conda Plugin (Correct Repo)
-        # This repo provides Python support including Miniconda setup, fixing compatibility on old Debian
-        wget -O linuxdeploy-plugin-conda-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy-plugin-conda/releases/download/continuous/linuxdeploy-plugin-conda-x86_64.AppImage
-        chmod +x linuxdeploy-plugin-conda-x86_64.AppImage
-        
-        # 3. Place plugin in 'root' folder so it is automatically discovered
-        mkdir -p root
-        mv linuxdeploy-plugin-conda-x86_64.AppImage root/linuxdeploy-plugin-conda-x86_64.AppImage
+        # Prepare AppImage directory
+        mkdir -p AppDir/usr/bin
 
-    - name: Install Python Libraries (Stable Config)
+    - name: Download Static FFmpeg (For Video Decoding)
       run: |
-        # Pin Numpy < 2.0 to prevent conflicts with TensorFlow/PyTorch
-        pip install "numpy<2.0"
-        
-        # Install CPU-only PyTorch (Standardizes env, avoids GPU driver errors)
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        
-        # Install application dependencies
-        pip install ffsubsync requests
-
-    - name: Download & Extract Static FFmpeg
-      run: |
-        # Download static build (Self-contained, works on old Debian)
         wget -qO archive.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
-        
-        # Extract into a temp folder
         mkdir -p ext && tar xf archive.tar.xz -C ext --strip-components=1
-        
-        # Robust copy: check if it's in bin/ or root
-        if [ -f ext/bin/ffmpeg ]; then
-          cp ext/bin/ffmpeg .
-        else
-          cp ext/ffmpeg .
-        fi
-        
-        # Cleanup
         rm -rf ext archive.tar.xz
         chmod +x ffmpeg
+        
+        # Copy FFmpeg to internal AppDir bin
+        mv ./ffmpeg AppDir/usr/bin/ffmpeg
 
-    - name: Prepare Desktop File & Icons
+    - name: Install Miniconda (For Compatibility with Old Debian)
       run: |
-        mkdir -p files/usr/share/applications files/usr/share/icons/hicolor/128x128/apps
+        # Miniconda provides a stable, static-compatible Python runtime
+        wget -qO miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+        bash miniconda.sh -b -u -p "${{ github.workspace }}/AppDir/miniconda3"
+        rm miniconda.sh
         
-        # Create .desktop file safely
-        printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > files/desktop_file.desktop
+        # Initialize conda so scripts can find it
+        # NOTE: We will manually configure paths in the script below, but this fixes the env creation
+        eval "$(${APP_DIR:-${{ github.workspace }}}/AppDir/miniconda3/bin/conda shell.bash hook)" 
+
+    - name: Install Python Libraries in Isolated Environment
+      run: |
+        # Create a specific environment for our app
+        ~/AppDir/miniconda3/bin/conda create -y -n myapp python=3.10
         
-        # Download icon
-        wget -q -O files/icon.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
+        # Activate the env and install dependencies
+        # Pinned Numpy < 2.0 prevents conflicts
+        ~/AppDir/miniconda3/envs/myapp/bin/pip install --no-cache-dir "numpy<2.0"
+        
+        # Install PyTorch CPU-only (standardizes the build)
+        ~/AppDir/miniconda3/envs/myapp/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        
+        # Install Application Dependencies
+        ~/AppDir/miniconda3/envs/myapp/bin/pip install ffsubsync requests pysubs2 tqdm
+
+    - name: Configure Application Files
+      run: |
+        # Copy Main Script
+        cp ./main.py AppDir/main.py
+        chmod +x AppDir/main.py
+        
+        # Create AppRun Launcher Script
+        # This script sets up the paths so the app finds its internal Python and FFmpeg
+        cat > AppDir/AppRun << 'EOF'
+        #!/bin/sh
+        SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+        
+        # Set up paths to bundled resources
+        export PATH="$SCRIPT_DIR/miniconda3/envs/myapp/bin:$PATH"
+        export LD_LIBRARY_PATH="$SCRIPT_DIR/miniconda3/envs/myapp/lib:$SCRIPT_DIR/miniconda3/lib:$LD_LIBRARY_PATH"
+        
+        # Execute the main script
+        exec "$SCRIPT_DIR/miniconda3/envs/myapp/bin/python" "$SCRIPT_DIR/main.py" "$@"
+        EOF
+        chmod +x AppDir/AppRun
+
+    - name: Prepare Desktop Integration
+      run: |
+        mkdir -p AppDir/usr/share/applications
+        printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > AppDir/usr/share/applications/SubSyncGui.desktop
+        
+        # Icon setup
+        mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
+        wget -q -O AppDir/usr/share/icons/hicolor/128x128/apps/subsync.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
 
     - name: Build AppImage
       run: |
-        mkdir -p AppDir/usr/bin
-        
-        # CRITICAL: Inject our bundled FFmpeg into the AppImage internals
-        cp ./ffmpeg AppDir/usr/bin/ffmpeg
-        
-        # Copy Main Script into the AppDir (Required for plugins to detect it)
-        cp ./main.py AppDir/usr/bin/main.py
-        
-        # Run builder
-        # FIX: Use '--plugin conda' as it is the official replacement for python scripting support
-        # FIX: Removed '--executable main.py' because .py is text, not a binary
+        # Build using the core linuxdeploy tool
         ./linuxdeploy-x86_64.AppImage \
           --appdir AppDir \
-          --icon-file files/icon.png \
-          --desktop-file files/desktop_file.desktop \
-          --plugin conda \
+          --desktop-file AppDir/usr/share/applications/*.desktop \
+          --icon-file AppDir/usr/share/icons/hicolor/128x128/apps/*.png \
           --output appimage
 
     - name: Upload Artifact
