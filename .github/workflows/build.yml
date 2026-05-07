@@ -1,0 +1,78 @@
+name: Build AppImage
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-appimage:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y software-properties-common
+        sudo add-apt-repository ppa:savoury1/ffmpeg4
+        sudo apt-get update
+        sudo apt-get install -y python3-dev python3-tk ffmpeg libsvm-tools patchelf wget curl unzip
+        # Ensure we have a good build environment for python wheels
+        pip install --upgrade pip setuptools wheel
+
+    - name: Install Python Requirements
+      run: |
+        pip install subsync
+        pip install requests # For icons/downloaders if needed later
+
+    - name: Install LinuxDeploy Tools
+      run: |
+        chmod +x linuxdeploy-x86_64.AppImage
+        chmod +x linuxdeploy-plugin-python-x86_64.AppImage
+        chmod +x desktop-file-validate
+
+    - name: Prepare Desktop File & Icons
+      run: |
+        mkdir -p ./files/usr/share/applications
+        cat > ./files/usr/share/applications/${{ secrets.APP_ID || 'com.example.subsync' }}.desktop <<EOF
+        [Desktop Entry]
+        Type=Application
+        Name=$(yq -r '.AppName' metadata.yml)
+        Exec=$(basename ${PWD}) %f
+        Icon=${{ secrets.ICON || 'utilities-terminal' }}
+        Terminal=false
+        Categories=AudioVideo;Utility;
+        EOF
+        
+        mkdir -p ./files/usr/share/icons/hicolor/128x128/apps
+        wget -O ./files/usr/share/icons/hicolor/128x128/apps/subsync.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || echo "Download failed, proceeding..."
+
+    - name: Build AppImage
+      id: build
+      run: |
+        # Define AppImage filename
+        APPNAME="${{ github.event.repository.name }}"
+        
+        # Copy ffmpeg binary into the AppImage structure explicitly
+        # This ensures it works on old Debian systems that lack ffmpeg
+        cp "$(which ffmpeg)" /tmp/bundled_ffmpeg
+        cp /tmp/bundled_ffmpeg /AppDir/usr/bin/ffmpeg
+        chmod +x /AppDir/usr/bin/ffmpeg
+
+        # Run linuxdeploy with the python plugin
+        ./linuxdeploy-x86_64.AppImage \
+          --appdir AppDir \
+          --executable main.py \
+          --plugin python \
+          --desktop-file files/usr/share/applications/*.desktop \
+          --icon-file files/usr/share/icons/hicolor/128x128/apps/*.png \
+          --output appimage
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: FFSubsyncGUI_AppImage
+        path: ${{ github.event.repository.name }}*.AppImage
