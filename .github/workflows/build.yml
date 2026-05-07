@@ -25,7 +25,7 @@ jobs:
         wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
         chmod +x linuxdeploy-x86_64.AppImage
         
-        # 2. Download the FIXED Python Plugin (Using 'continuous' tag)
+        # 2. Download the FIXED Python Plugin (Using 'continuous' tag to avoid 404)
         wget -O linuxdeploy-plugin-python-x86_64.AppImage https://github.com/niess/linuxdeploy-plugin-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage
         chmod +x linuxdeploy-plugin-python-x86_64.AppImage
         
@@ -70,23 +70,26 @@ jobs:
         # Create .desktop file
         printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > files/desktop_file.desktop
         
-        # Download icon (ignore error if download fails)
+        # Download icon (ignore error if network is slow)
         wget -q -O files/icon.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
 
     - name: Build AppImage
       run: |
         mkdir -p AppDir/usr/bin
         
-        # CRITICAL STEP: Inject our bundled FFmpeg into the AppImage internals
-        # This ensures video decoding works on systems lacking ffmpeg libraries
+        # CRITICAL: Inject our bundled FFmpeg into the AppImage internals
         cp ./ffmpeg AppDir/usr/bin/ffmpeg
         
+        # Copy Main Script into the AppDir so the python plugin can bundle it
+        cp ./main.py AppDir/usr/bin/main.py
+        
         # Run the builder
+        # FIX: Removed '--executable main.py' because it is a text file, not a binary.
+        # The Python plugin handles bundling and execution of .py scripts.
         ./linuxdeploy-x86_64.AppImage \
           --appdir AppDir \
-          --executable main.py \
-          --desktop-file files/desktop_file.desktop \
           --icon-file files/icon.png \
+          --desktop-file files/desktop_file.desktop \
           --plugin python \
           --output appimage
 
