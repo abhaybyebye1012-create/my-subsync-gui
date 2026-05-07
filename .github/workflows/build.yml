@@ -13,86 +13,91 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install Basic System Tools
+    - name: Install System Tools
       run: |
         sudo apt-get update
-        # Minimal tools needed only to extract and package
-        sudo apt-get install -y patchelf wget curl unzip xdg-utils build-essential gcc g++
+        sudo apt-get install -y patchelf wget curl unzip xdg-utils gcc g++
 
-    - name: Download Core Builder
+    - name: Download Core Linuxdeploy Tool
       run: |
-        # Download ONLY the core tool. No plugins means no 404 errors.
+        cd ${{ github.workspace }}
         wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
         chmod +x linuxdeploy-x86_64.AppImage
 
     - name: Install Embedded Runtime (Miniconda)
       run: |
+        cd ${{ github.workspace }}
         mkdir -p AppDir
-        cd AppDir
         
-        # Download Miniconda installer
+        # Download and install Miniconda silently into AppDir
         wget -qO miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-        
-        # Install directly into AppDir (Embedded Python Runtime)
-        bash miniconda.sh -b -u -p ./miniconda3
+        bash miniconda.sh -b -u -p "${{ github.workspace }}/AppDir/miniconda3"
         rm miniconda.sh
-        
-        # Initialize conda shell hooks for subsequent commands
-        eval "$(./miniconda3/bin/conda shell.bash hook)"
 
-    - name: Install Application Libraries
+    - name: Create Isolated Environment & Install Dependencies
       run: |
-        cd AppDir
+        CONDA_INSTALL="${{ github.workspace }}/AppDir/miniconda3"
+        ENV_PREFIX="${{ github.workspace }}/AppDir/envs/myenv"
         
-        # Create isolated environment to prevent global mess
-        conda create -y -n myenv python=3.10 --prefix ./envs/myenv
+        # Create a specific environment
+        $CONDA_INSTALL/bin/conda create -y -n myenv python=3.10 --prefix "$ENV_PREFIX"
         
-        # Activate environment
-        eval "$(./miniconda3/bin/conda activate ./envs/myenv)"
-        
-        # Install dependencies into the embedded environment
-        # Pinned numpy < 2.0 prevents tensorflow/pytorch conflicts
-        ./envs/myenv/bin/pip install "numpy<2.0" torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        ./envs/myenv/bin/pip install ffsubsync requests pysubs2 tqdm
+        # Install dependencies into that specific environment
+        $CONDA_INSTALL/envs/myenv/bin/pip install "numpy<2.0" torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        $CONDA_INSTALL/envs/myenv/bin/pip install ffsubsync requests pysubs2 tqdm
 
-    - name: Download & Bundle FFmpeg
+    - name: Download & Bundle Static FFmpeg
       run: |
-        cd AppDir
-        
-        # Download static FFmpeg (contains its own libs, good for old systems)
-        wget -qO archive.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
-        mkdir -p ext && tar xf archive.tar.xz -C ext --strip-components=1
-        
-        # CORRECT ORDER: Move file BEFORE deleting folder
-        if [ -f ext/ffmpeg ]; then mv ext/ffmpeg usr/bin/ffmpeg; elif [ -f ext/bin/ffmpeg ]; then mv ext/bin/ffmpeg usr/bin/ffmpeg; fi
+        cd ${{ github.workspace }}/AppDir
         mkdir -p usr/bin
-        if [ -f ext/ffmpeg ]; then mv ext/ffmpeg usr/bin/ffmpeg; elif [ -f ext/bin/ffmpeg ]; then mv ext/bin/ffmpeg usr/bin/ffmpeg; fi
+        mkdir -p ext
+        
+        # Download archive
+        wget -qO archive.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+        
+        # Extract safely
+        tar xf archive.tar.xz -C ext --strip-components=1
+        
+        # Move binary to the correct place
+        if [ -f ext/ffmpeg ]; then mv ext/ffmpeg usr/bin/ffmpeg; fi
+        if [ ! -f usr/bin/ffmpeg ] && [ -f ext/bin/ffmpeg ]; then mv ext/bin/ffmpeg usr/bin/ffmpeg; fi
+        
+        # Remove temp files
         rm -rf ext archive.tar.xz
-        
-    - name: Prepare Desktop Integration
-      run: |
-        mkdir -p AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/128x128/apps
-        
-        printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > AppDir/usr/share/applications/SubSyncGui.desktop
-        wget -q -O AppDir/usr/share/icons/hicolor/128x128/apps/subsync.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
+        chmod +x usr/bin/ffmpeg
 
-    - name: Configure AppRun Launcher (CRITICAL)
+    - name: Prepare Desktop Files
       run: |
-        # This script tells the system where to find our internal python libraries
-        cat > AppDir/AppRun << 'EOF'
+        cd ${{ github.workspace }}/AppDir
+        mkdir -p usr/share/applications usr/share/icons/hicolor/128x128/apps
+        
+        printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > usr/share/applications/SubSyncGui.desktop
+        wget -q -O usr/share/icons/hicolor/128x128/apps/subsync.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
+
+    - name: Configure Launchers (AppRun)
+      run: |
+        cd ${{ github.workspace }}/AppDir
+        
+        # Copy main script
+        cp ${{ github.workspace }}/main.py .
+        
+        # Create the executable launcher
+        cat > AppRun << 'EOF'
         #!/bin/bash
         SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+        # Point to our embedded libraries
         export PATH="$SCRIPT_DIR/envs/myenv/bin:$PATH"
         export LD_LIBRARY_PATH="$SCRIPT_DIR/envs/myenv/lib:$SCRIPT_DIR/miniconda3/lib:$LD_LIBRARY_PATH"
+        # Execute the app
         exec "$SCRIPT_DIR/envs/myenv/bin/python" "$SCRIPT_DIR/main.py" "$@"
         EOF
-        chmod +x AppDir/AppRun
-        
-        cp ../main.py AppDir/main.py
+        chmod +x AppRun
 
     - name: Build AppImage
       run: |
-        # Standard linuxdeploy command, no plugins required anymore
+        cd ${{ github.workspace }}
+        
+        # Package everything inside AppDir
         ./linuxdeploy-x86_64.AppImage \
           --appdir AppDir \
           --desktop-file AppDir/usr/share/applications/*.desktop \
