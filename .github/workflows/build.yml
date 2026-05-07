@@ -1,4 +1,4 @@
-name: Build Standalone AppImage (Full Proof)
+name: Build Standalone AppImage (Corrected)
 
 on:
   push:
@@ -16,44 +16,44 @@ jobs:
     - name: Install System Dependencies
       run: |
         sudo apt-get update
-        # Install dev tools needed to compile Python packages (like ffmpeg-python/cchardet)
+        # Install necessary tools for compiling Python C-extensions
         sudo apt-get install -y python3-dev python3-tk patchelf wget curl unzip xdg-utils build-essential gcc g++
 
-    - name: Download Linuxdeploy & Plugin (FIXED REPO)
+    - name: Download Linuxdeploy & Official Python Plugin
       run: |
-        # 1. Core tool (Continuous build)
+        # 1. Download core tool
         wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
         chmod +x linuxdeploy-x86_64.AppImage
         
-        # 2. Python Plugin (Official repo is niess/linuxdeploy-plugin-python)
-        # Using 'latest' tag as it points to the most recent stable release
-        wget -O linuxdeploy-plugin-python-x86_64.AppImage https://github.com/niess/linuxdeploy-plugin-python/releases/latest/download/linuxdeploy-plugin-python-x86_64.AppImage
+        # 2. Download Official Python Plugin (Fixed Repository)
+        # We use the 'continuous' build tag from the official repo to avoid 404s
+        wget -O linuxdeploy-plugin-python-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy-plugin-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage
         chmod +x linuxdeploy-plugin-python-x86_64.AppImage
         
-        # 3. Move plugin to 'root' directory so linuxdeploy discovers it automatically
+        # 3. Place plugin in 'root' folder so it is automatically discovered
         mkdir -p root
-        mv linuxdeploy-plugin-python-x86_64.AppImage root/
+        mv linuxdeploy-plugin-python-x86_64.AppImage root/linuxdeploy-plugin-python-x86_64.AppImage
 
     - name: Install Python Libraries (Stable Config)
       run: |
-        # Pin Numpy < 2.0 to prevent conflict with TensorFlow/PyTorch transitive deps
+        # Pin Numpy < 2.0 to prevent conflicts with TensorFlow/PyTorch
         pip install "numpy<2.0"
         
-        # Install CPU-only PyTorch (Standardizes env, avoids GPU driver errors)
+        # Install CPU-only PyTorch (Reduces size and avoids GPU driver errors)
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         
-        # Install the application itself
+        # Install application dependencies
         pip install ffsubsync requests
 
     - name: Download & Extract Static FFmpeg
       run: |
-        # Download the static build
+        # Download static build
         wget -qO archive.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
         
-        # Extract into a temp folder
+        # Extract to temp folder
         mkdir -p ext && tar xf archive.tar.xz -C ext --strip-components=1
         
-        # Robust copy: check if it's in bin/ or root, then copy to project root
+        # Robust copy (handles folder structure changes)
         if [ -f ext/bin/ffmpeg ]; then
           cp ext/bin/ffmpeg .
         else
@@ -68,26 +68,24 @@ jobs:
       run: |
         mkdir -p files/usr/share/applications files/usr/share/icons/hicolor/128x128/apps
         
-        # Create .desktop file
+        # Create .desktop file safely
         printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > files/desktop_file.desktop
         
-        # Download icon (ignore error if network is slow)
+        # Download icon (ignore failure if download breaks)
         wget -q -O files/icon.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
 
     - name: Build AppImage
       run: |
         mkdir -p AppDir/usr/bin
         
-        # CRITICAL: Inject our bundled FFmpeg into the AppImage internals
-        # This ensures video decoding works on systems lacking ffmpeg libraries
+        # CRITICAL: Inject static FFmpeg into internals
         cp ./ffmpeg AppDir/usr/bin/ffmpeg
         
-        # Copy Main Script into the AppDir so the python plugin can bundle it
+        # Copy Main Script into AppDir (Required for Python plugin)
+        # We do NOT use --executable here because .py files are text, not binaries
         cp ./main.py AppDir/usr/bin/main.py
         
-        # Run the builder
-        # FIX: Removed '--executable main.py' because it is a text file, not a binary.
-        # The Python plugin handles bundling and execution of .py scripts.
+        # Run builder
         ./linuxdeploy-x86_64.AppImage \
           --appdir AppDir \
           --icon-file files/icon.png \
