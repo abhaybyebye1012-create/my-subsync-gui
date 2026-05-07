@@ -1,4 +1,4 @@
-name: Build FFSubsync AppImage (Full Proof)
+name: Build Standalone AppImage
 
 on:
   push:
@@ -16,36 +16,38 @@ jobs:
     - name: Install System Tools
       run: |
         sudo apt-get update
-        sudo apt-get install -y python3-dev python3-tk patchelf wget curl unzip xdg-utils build-essential gcc
+        # Install only dev tools needed to build python wheels locally
+        sudo apt-get install -y python3-dev python3-tk patchelf wget curl unzip xdg-utils build-essential gcc g++
 
-    - name: Download Linuxdeploy & Plugin (FIXED)
+    - name: Download Linuxdeploy & Plugins (FIXED)
       run: |
-        # 1. Download the core linuxdeploy tool
+        # 1. Download the core linuxdeploy tool (Continuous build)
         wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
         chmod +x linuxdeploy-x86_64.AppImage
         
-        # 2. Download the Python Plugin (Required for our Python app)
-        wget -O linuxdeploy-plugin-python-x86_64.AppImage https://github.com/linuxdeploy/plugin-script-python/releases/latest/download/linuxdeploy-plugin-python-x86_64.AppImage
+        # 2. Download the FIXED Python Plugin (Moved to niess/linuxdeploy-plugin-python)
+        wget -O linuxdeploy-plugin-python-x86_64.AppImage https://github.com/niess/linuxdeploy-plugin-python/releases/latest/download/linuxdeploy-plugin-python-x86_64.AppImage
         chmod +x linuxdeploy-plugin-python-x86_64.AppImage
         
-        # 3. Move the plugin into the 'root' directory so linuxdeploy detects it
+        # 3. Move plugin to 'root' so linuxdeploy finds it automatically
         mkdir -p root
         mv linuxdeploy-plugin-python-x86_64.AppImage root/linuxdeploy-plugin-python-x86_64.AppImage
 
-    - name: Install Python Libraries (Dependency Fix)
+    - name: Install Python Libraries (Stable Dependencies)
       run: |
-        # 1. Force compatible Numpy version to prevent conflicts
+        # Fix for previous dependency errors: Pin NumPy < 2.0 to avoid conflicts
         pip install "numpy<2.0"
         
-        # 2. Install PyTorch (CPU Only to save space/time)
+        # Install PyTorch (CPU Only to save space/time and avoid driver errors)
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         
-        # 3. Install the actual application dependencies
+        # Install the main application and its dependencies
         pip install ffsubsync requests
 
-    - name: Download Static FFmpeg (Bundled)
+    - name: Download Static FFmpeg (Bundled for Old Debian)
       run: |
         cd /tmp
+        # Download a self-contained static build that works on almost ANY Linux kernel
         wget -N https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
         mkdir -p ffmpeg_tmp && tar xf ffmpeg-release-amd64-static.tar.xz -C ffmpeg_tmp --strip-components=1
         mv ffmpeg_tmp/ffmpeg ./bundled_ffmpeg
@@ -56,17 +58,18 @@ jobs:
       run: |
         mkdir -p files/usr/share/applications files/usr/share/icons/hicolor/128x128/apps
         
-        # Create desktop file safely
+        # Create .desktop file using printf (safer than heredoc for single lines)
         printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > files/desktop_file.desktop
         
-        # Download icon (ignore error if download fails)
+        # Download icon (ignore errors if network is slow)
         wget -q -O files/icon.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
 
     - name: Build AppImage
       run: |
         mkdir -p AppDir/usr/bin
         
-        # CRITICAL: Inject our bundled FFmpeg into the AppImage internals
+        # CRITICAL STEP: Inject our bundled FFmpeg into the AppImage internals
+        # This ensures the video engine works even if the target computer has NO ffmpeg installed.
         cp ./bundled_ffmpeg AppDir/usr/bin/ffmpeg
         
         # Run the builder
