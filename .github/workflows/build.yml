@@ -16,7 +16,7 @@ jobs:
     - name: Install System Tools
       run: |
         sudo apt-get update
-        # Added libffi-dev and pkg-config for secure Python package compilation
+        # Install tools required to build Python extensions (e.g., scikit-learn)
         sudo apt-get install -y patchelf wget curl unzip xdg-utils gcc g++ libffi-dev pkg-config
 
     - name: Download Core Linuxdeploy Tool
@@ -35,20 +35,23 @@ jobs:
         bash miniconda.sh -b -u -p "${{ github.workspace }}/AppDir/miniconda3"
         rm miniconda.sh
 
-    - name: Create Isolated Environment & Install Dependencies
+    - name: Create Isolated Environment & Install Dependencies (FIXED PIP)
       run: |
         CONDA_INSTALL="${{ github.workspace }}/AppDir/miniconda3"
         ENV_PREFIX="${{ github.workspace }}/AppDir/envs/myenv"
         
-        # FIX: Removed '-n myenv' because '-p' is used with an absolute path.
-        # You cannot use both -n and -p together in newer conda versions.
+        # Create a specific environment with Python 3.10
         mkdir -p "${{ github.workspace }}/AppDir/envs"
         $CONDA_INSTALL/bin/conda create -y -p "$ENV_PREFIX" python=3.10
         
-        # Install dependencies into that specific environment
-        # Pinned numpy < 2.0 prevents conflicts
-        $CONDA_INSTALL/envs/myenv/bin/pip install "numpy<2.0" torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        $CONDA_INSTALL/envs/myenv/bin/pip install ffsubsync requests pysubs2 tqdm
+        # FIX: Use 'python -m pip' instead of 'bin/pip'.
+        # This bypasses the 'file not found' error if the wrapper script is missing.
+        ${ENV_PREFIX}/bin/python -m pip install --upgrade pip setuptools wheel
+        
+        # Install dependencies
+        # Note: Added 'scikit-learn' which ffsubsync requires for the alignment algorithm
+        ${ENV_PREFIX}/bin/python -m pip install "numpy<2.0" torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        ${ENV_PREFIX}/bin/python -m pip install scikit-learn ffsubsync requests pysubs2 tqdm
 
     - name: Download & Bundle Static FFmpeg
       run: |
@@ -56,13 +59,13 @@ jobs:
         mkdir -p "$APP_DIR/usr/bin"
         mkdir -p ext
         
-        # Download archive
+        # Download static FFmpeg archive
         wget -qO archive.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
         
         # Extract safely
         tar xf archive.tar.xz -C ext --strip-components=1
         
-        # Move binary to the correct place
+        # Move binary to the correct place (handles folder structure variations)
         if [ -f ext/ffmpeg ]; then mv ext/ffmpeg "$APP_DIR/usr/bin/ffmpeg"; fi
         if [ ! -f "$APP_DIR/usr/bin/ffmpeg" ] && [ -f ext/bin/ffmpeg ]; then mv ext/bin/ffmpeg "$APP_DIR/usr/bin/ffmpeg"; fi
         
@@ -90,9 +93,14 @@ jobs:
         cat > "$APP_DIR/AppRun" << 'EOF'
         #!/bin/bash
         SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
-        # Ensure our internal python and ffmpeg are found
-        export PATH="$SCRIPT_DIR/envs/myenv/bin:$SCRIPT_DIR/usr/bin:$PATH"
+        
+        # CRITICAL PATH SETUP:
+        # 1. Add our internal Python, FFmpeg, and Conda to PATH
+        export PATH="$SCRIPT_DIR/envs/myenv/bin:$SCRIPT_DIR/usr/bin:$SCRIPT_DIR/miniconda3/bin:$PATH"
+        
+        # 2. Point to our embedded C-runtime (Fixes "old debian" library errors)
         export LD_LIBRARY_PATH="$SCRIPT_DIR/envs/myenv/lib:$SCRIPT_DIR/miniconda3/lib:$LD_LIBRARY_PATH"
+        
         # Execute the app
         exec "$SCRIPT_DIR/envs/myenv/bin/python" "$SCRIPT_DIR/main.py" "$@"
         EOF
