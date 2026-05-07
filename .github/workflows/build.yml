@@ -1,4 +1,4 @@
-name: Build FFSubsync GUI AppImage
+name: Build Standalone AppImage
 
 on:
   push:
@@ -13,64 +13,67 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install Basic Build Tools
+    - name: Install System Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y python3-dev python3-tk patchelf wget curl unzip xdg-utils
-        # Upgrade pip to ensure compatibility
         pip install --upgrade pip setuptools wheel
 
     - name: Install Python Requirements
+      run: pip install subsync requests
+
+    - name: Download Linuxdeploy & Python Plugin
       run: |
-        pip install subsync
-        pip install requests
+        # Download the main linuxdeploy executable
+        wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+        chmod +x linuxdeploy-x86_64.AppImage
+        
+        # Download the Python Plugin (Required to wrap your Python app)
+        wget -O linuxdeploy-plugin-python-x86_64.AppImage https://raw.githubusercontent.com/linuxdeploy/AppImages/master/plugins/python/linuxdeploy-plugin-python-x86_64.AppImage
+        chmod +x linuxdeploy-plugin-python-x86_64.AppImage
+        
+        # Place the plugin in the 'root' directory so linuxdeploy finds it automatically
+        mkdir -p root
+        mv linuxdeploy-plugin-python-x86_64.AppImage root/linuxdeploy-plugin-python-x86_64.AppImage
 
     - name: Download Static FFmpeg
       run: |
-        # We download a static build from John Van Sickle which includes all internal libraries
-        cd /tmp
-        wget -N https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
-        # Extract it to a temporary folder
-        mkdir -p /tmp/ffmpeg_static && tar xf ffmpeg-release-amd64-static.tar.xz -C /tmp/ffmpeg_static --strip-components=1
+        # Download a self-contained FFmpeg build
+        wget -O ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+        mkdir -p ffmpeg_tmp
+        tar xf ffmpeg.tar.xz -C ffmpeg_tmp --strip-components=1
+        mv ffmpeg_tmp/ffmpeg ./bundled_ffmpeg
+        rm -rf ffmpeg_tmp ffmpeg.tar.xz
 
     - name: Prepare Desktop File & Icons
       run: |
-        mkdir -p ./files/usr/share/applications
-        cat > ./files/usr/share/applications/com.example.ffsubsync.desktop <<EOF
-        [Desktop Entry]
-        Type=Application
-        Name=FFSubsync GUI
-        Exec=AppRun
-        Icon=subsync
-        Terminal=false
-        Categories=AudioVideo;Utility;
-        EOF
+        mkdir -p files/usr/share/applications files/usr/share/icons/hicolor/128x128/apps
         
-        mkdir -p ./files/usr/share/icons/hicolor/128x128/apps
-        # Download a placeholder icon
-        wget -q -O ./files/usr/share/icons/hicolor/128x128/apps/subsync.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || echo "Icon skipped."
+        # Create .desktop file using printf to avoid heredoc syntax errors
+        printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > files/desktop_file.desktop
+        
+        # Download icon (ignore errors if download fails)
+        wget -q -O files/icon.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
 
     - name: Build AppImage
-      id: build
       run: |
-        # CRITICAL STEP:
-        # Copy the static FFmpeg binary into the AppImage's binary directory.
-        # This ensures the AppImage has the engine needed to decode videos,
-        # regardless of whether the user's old Debian system has FFmpeg installed.
-        cp /tmp/ffmpeg_static/ffmpeg ./AppDir/usr/bin/ffmpeg
-        chmod +x ./AppDir/usr/bin/ffmpeg
-
-        # Run LinuxDeploy with the Python Plugin
+        # Create binary directory in the AppDir
+        mkdir -p AppDir/usr/bin
+        
+        # Inject our bundled FFmpeg binary into the AppImage internals
+        cp ./bundled_ffmpeg AppDir/usr/bin/ffmpeg
+        
+        # Run the builder
         ./linuxdeploy-x86_64.AppImage \
           --appdir AppDir \
           --executable main.py \
+          --desktop-file files/desktop_file.desktop \
+          --icon-file files/icon.png \
           --plugin python \
-          --desktop-file ./files/usr/share/applications/*.desktop \
-          --icon-file ./files/usr/share/icons/hicolor/128x128/apps/*.png \
           --output appimage
 
-    - name: Upload Artifacts (v4)
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: ffsubsync-gui
-        path: *.AppImage
+        path: "*.AppImage"
