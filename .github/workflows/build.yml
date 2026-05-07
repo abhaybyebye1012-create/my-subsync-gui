@@ -16,7 +16,8 @@ jobs:
     - name: Install System Tools
       run: |
         sudo apt-get update
-        sudo apt-get install -y patchelf wget curl unzip xdg-utils gcc g++
+        # Added libffi-dev and pkg-config for secure Python package compilation
+        sudo apt-get install -y patchelf wget curl unzip xdg-utils gcc g++ libffi-dev pkg-config
 
     - name: Download Core Linuxdeploy Tool
       run: |
@@ -39,17 +40,20 @@ jobs:
         CONDA_INSTALL="${{ github.workspace }}/AppDir/miniconda3"
         ENV_PREFIX="${{ github.workspace }}/AppDir/envs/myenv"
         
-        # Create a specific environment
-        $CONDA_INSTALL/bin/conda create -y -n myenv python=3.10 --prefix "$ENV_PREFIX"
+        # FIX: Removed '-n myenv' because '-p' is used with an absolute path.
+        # You cannot use both -n and -p together in newer conda versions.
+        mkdir -p "${{ github.workspace }}/AppDir/envs"
+        $CONDA_INSTALL/bin/conda create -y -p "$ENV_PREFIX" python=3.10
         
         # Install dependencies into that specific environment
+        # Pinned numpy < 2.0 prevents conflicts
         $CONDA_INSTALL/envs/myenv/bin/pip install "numpy<2.0" torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         $CONDA_INSTALL/envs/myenv/bin/pip install ffsubsync requests pysubs2 tqdm
 
     - name: Download & Bundle Static FFmpeg
       run: |
-        cd ${{ github.workspace }}/AppDir
-        mkdir -p usr/bin
+        APP_DIR="${{ github.workspace }}/AppDir"
+        mkdir -p "$APP_DIR/usr/bin"
         mkdir -p ext
         
         # Download archive
@@ -59,39 +63,40 @@ jobs:
         tar xf archive.tar.xz -C ext --strip-components=1
         
         # Move binary to the correct place
-        if [ -f ext/ffmpeg ]; then mv ext/ffmpeg usr/bin/ffmpeg; fi
-        if [ ! -f usr/bin/ffmpeg ] && [ -f ext/bin/ffmpeg ]; then mv ext/bin/ffmpeg usr/bin/ffmpeg; fi
+        if [ -f ext/ffmpeg ]; then mv ext/ffmpeg "$APP_DIR/usr/bin/ffmpeg"; fi
+        if [ ! -f "$APP_DIR/usr/bin/ffmpeg" ] && [ -f ext/bin/ffmpeg ]; then mv ext/bin/ffmpeg "$APP_DIR/usr/bin/ffmpeg"; fi
         
         # Remove temp files
         rm -rf ext archive.tar.xz
-        chmod +x usr/bin/ffmpeg
+        chmod +x "$APP_DIR/usr/bin/ffmpeg"
 
     - name: Prepare Desktop Files
       run: |
-        cd ${{ github.workspace }}/AppDir
-        mkdir -p usr/share/applications usr/share/icons/hicolor/128x128/apps
+        APP_DIR="${{ github.workspace }}/AppDir"
+        mkdir -p "$APP_DIR/usr/share/applications" "$APP_DIR/usr/share/icons/hicolor/128x128/apps"
         
-        printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > usr/share/applications/SubSyncGui.desktop
-        wget -q -O usr/share/icons/hicolor/128x128/apps/subsync.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
+        printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > "$APP_DIR/usr/share/applications/SubSyncGui.desktop"
+        wget -q -O "$APP_DIR/usr/share/icons/hicolor/128x128/apps/subsync.png" "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
 
     - name: Configure Launchers (AppRun)
       run: |
-        cd ${{ github.workspace }}/AppDir
+        APP_DIR="${{ github.workspace }}/AppDir"
+        GITHUB_WORKSPACE="${{ github.workspace }}"
         
         # Copy main script
-        cp ${{ github.workspace }}/main.py .
+        cp "$GITHUB_WORKSPACE/main.py" "$APP_DIR/main.py"
         
         # Create the executable launcher
-        cat > AppRun << 'EOF'
+        cat > "$APP_DIR/AppRun" << 'EOF'
         #!/bin/bash
         SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
-        # Point to our embedded libraries
-        export PATH="$SCRIPT_DIR/envs/myenv/bin:$PATH"
+        # Ensure our internal python and ffmpeg are found
+        export PATH="$SCRIPT_DIR/envs/myenv/bin:$SCRIPT_DIR/usr/bin:$PATH"
         export LD_LIBRARY_PATH="$SCRIPT_DIR/envs/myenv/lib:$SCRIPT_DIR/miniconda3/lib:$LD_LIBRARY_PATH"
         # Execute the app
         exec "$SCRIPT_DIR/envs/myenv/bin/python" "$SCRIPT_DIR/main.py" "$@"
         EOF
-        chmod +x AppRun
+        chmod +x "$APP_DIR/AppRun"
 
     - name: Build AppImage
       run: |
