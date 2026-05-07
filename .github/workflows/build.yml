@@ -16,8 +16,8 @@ jobs:
     - name: Install System Tools
       run: |
         sudo apt-get update
-        # Install tools required to build Python extensions (e.g., scikit-learn)
-        sudo apt-get install -y patchelf wget curl unzip xdg-utils gcc g++ libffi-dev pkg-config
+        # Install dev tools required to compile Python extensions (like scikit-learn/numpy)
+        sudo apt-get install -y patchelf wget curl unzip xdg-utils gcc g++ libffi-dev pkg-config build-essential
 
     - name: Download Core Linuxdeploy Tool
       run: |
@@ -45,11 +45,10 @@ jobs:
         $CONDA_INSTALL/bin/conda create -y -p "$ENV_PREFIX" python=3.10
         
         # FIX: Use 'python -m pip' instead of 'bin/pip'.
-        # This bypasses the 'file not found' error if the wrapper script is missing.
         ${ENV_PREFIX}/bin/python -m pip install --upgrade pip setuptools wheel
         
         # Install dependencies
-        # Note: Added 'scikit-learn' which ffsubsync requires for the alignment algorithm
+        # Note: Added 'scikit-learn' which ffsubsync relies on for the alignment algorithm
         ${ENV_PREFIX}/bin/python -m pip install "numpy<2.0" torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         ${ENV_PREFIX}/bin/python -m pip install scikit-learn ffsubsync requests pysubs2 tqdm
 
@@ -106,12 +105,12 @@ jobs:
         EOF
         chmod +x "$APP_DIR/AppRun"
 
-    - name: Build AppImage
+    - name: Build AppImage (FIXED ARCHITECTURE ERROR)
       run: |
         cd ${{ github.workspace }}
         
-        # Package everything inside AppDir
-        ./linuxdeploy-x86_64.AppImage \
+        # EXPLICITLY SET ARCH=x86_64 to resolve the 'arch not found' error
+        ARCH=x86_64 ./linuxdeploy-x86_64.AppImage \
           --appdir AppDir \
           --desktop-file AppDir/usr/share/applications/*.desktop \
           --output appimage
