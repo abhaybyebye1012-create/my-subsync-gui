@@ -1,4 +1,4 @@
-name: Build Standalone AppImage (Manual Conda Fix)
+name: Final Standalone AppImage Build
 
 on:
   push:
@@ -13,102 +13,86 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install System Dependencies
+    - name: Install Basic System Tools
       run: |
         sudo apt-get update
-        # Essential build tools for compiling Python extensions
-        sudo apt-get install -y python3-dev python3-tk patchelf wget curl unzip xdg-utils build-essential gcc g++
+        # Minimal tools needed only to extract and package
+        sudo apt-get install -y patchelf wget curl unzip xdg-utils build-essential gcc g++
 
-    - name: Download Core Linuxdeploy Tool
+    - name: Download Core Builder
       run: |
-        # Download only the core builder (No external plugins needed anymore)
+        # Download ONLY the core tool. No plugins means no 404 errors.
         wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
         chmod +x linuxdeploy-x86_64.AppImage
-        
-        # Prepare the AppImage directory structure
-        mkdir -p AppDir/usr/bin
 
-    - name: Download & Extract Static FFmpeg (FIXED EXTRACT ORDER)
+    - name: Install Embedded Runtime (Miniconda)
       run: |
-        cd $GITHUB_WORKSPACE
-        # Download archive
-        wget -qO archive.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+        mkdir -p AppDir
+        cd AppDir
         
-        # Create temp extraction folder
-        mkdir -p ext
-        tar xf archive.tar.xz -C ext --strip-components=1
-        
-        # CRITICAL FIX: Move the binary OUT of the temp folder BEFORE deleting the folder
-        if [ -f ext/ffmpeg ]; then
-          mv ext/ffmpeg AppDir/usr/bin/ffmpeg
-        elif [ -f ext/bin/ffmpeg ]; then
-          mv ext/bin/ffmpeg AppDir/usr/bin/ffmpeg
-        else
-          echo "ERROR: Could not locate ffmpeg binary!"
-          ls -lR ext
-          exit 1
-        fi
-        
-        # NOW it is safe to delete the temp files
-        rm -rf ext archive.tar.xz
-        chmod +x AppDir/usr/bin/ffmpeg
-
-    - name: Install Miniconda (Standalone Runtime)
-      run: |
-        cd $GITHUB_WORKSPACE
         # Download Miniconda installer
         wget -qO miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-        # Install Miniconda directly inside the AppDir structure
-        bash miniconda.sh -b -u -p ${PWD}/AppDir/miniconda3
+        
+        # Install directly into AppDir (Embedded Python Runtime)
+        bash miniconda.sh -b -u -p ./miniconda3
         rm miniconda.sh
         
-        # Initialize Conda environments for future use
-        eval "$(${PWD}/AppDir/miniconda3/bin/conda shell.bash hook)"
-        conda init bash > /dev/null 2>&1
+        # Initialize conda shell hooks for subsequent commands
+        eval "$(./miniconda3/bin/conda shell.bash hook)"
 
-    - name: Install Python Libraries (Isolated)
+    - name: Install Application Libraries
       run: |
-        cd $GITHUB_WORKSPACE
+        cd AppDir
         
-        # Create a virtual environment specifically for this AppImage
-        ~/AppDir/miniconda3/bin/conda create -y -n appenv python=3.10 --prefix "${PWD}/AppDir/envs/appenv"
+        # Create isolated environment to prevent global mess
+        conda create -y -n myenv python=3.10 --prefix ./envs/myenv
         
-        # Install packages into that isolated environment
-        ~/AppDir/miniconda3/envs/appenv/bin/pip install "numpy<2.0"
-        ~/AppDir/miniconda3/envs/appenv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        ~/AppDir/miniconda3/envs/appenv/bin/pip install ffsubsync requests pysubs2 tqdm
+        # Activate environment
+        eval "$(./miniconda3/bin/conda activate ./envs/myenv)"
         
-        # Copy the main script
-        cp ./main.py AppDir/main.py
+        # Install dependencies into the embedded environment
+        # Pinned numpy < 2.0 prevents tensorflow/pytorch conflicts
+        ./envs/myenv/bin/pip install "numpy<2.0" torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        ./envs/myenv/bin/pip install ffsubsync requests pysubs2 tqdm
 
-    - name: Configure Launchers
+    - name: Download & Bundle FFmpeg
       run: |
-        # Create a Custom AppRun script that manages the environment
+        cd AppDir
+        
+        # Download static FFmpeg (contains its own libs, good for old systems)
+        wget -qO archive.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+        mkdir -p ext && tar xf archive.tar.xz -C ext --strip-components=1
+        
+        # CORRECT ORDER: Move file BEFORE deleting folder
+        if [ -f ext/ffmpeg ]; then mv ext/ffmpeg usr/bin/ffmpeg; elif [ -f ext/bin/ffmpeg ]; then mv ext/bin/ffmpeg usr/bin/ffmpeg; fi
+        mkdir -p usr/bin
+        if [ -f ext/ffmpeg ]; then mv ext/ffmpeg usr/bin/ffmpeg; elif [ -f ext/bin/ffmpeg ]; then mv ext/bin/ffmpeg usr/bin/ffmpeg; fi
+        rm -rf ext archive.tar.xz
+        
+    - name: Prepare Desktop Integration
+      run: |
+        mkdir -p AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/128x128/apps
+        
+        printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > AppDir/usr/share/applications/SubSyncGui.desktop
+        wget -q -O AppDir/usr/share/icons/hicolor/128x128/apps/subsync.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
+
+    - name: Configure AppRun Launcher (CRITICAL)
+      run: |
+        # This script tells the system where to find our internal python libraries
         cat > AppDir/AppRun << 'EOF'
         #!/bin/bash
-        # Determine the directory where the AppImage is running from
         SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
-        
-        # Set paths to our internal Conda environment
-        export PATH="$SCRIPT_DIR/envs/appenv/bin:$PATH"
-        export LD_LIBRARY_PATH="$SCRIPT_DIR/envs/appenv/lib:$SCRIPT_DIR/miniconda3/lib:$LD_LIBRARY_PATH"
-        
-        # Execute the Main Script
-        exec "$SCRIPT_DIR/envs/appenv/bin/python" "$SCRIPT_DIR/main.py" "$@"
+        export PATH="$SCRIPT_DIR/envs/myenv/bin:$PATH"
+        export LD_LIBRARY_PATH="$SCRIPT_DIR/envs/myenv/lib:$SCRIPT_DIR/miniconda3/lib:$LD_LIBRARY_PATH"
+        exec "$SCRIPT_DIR/envs/myenv/bin/python" "$SCRIPT_DIR/main.py" "$@"
         EOF
         chmod +x AppDir/AppRun
-
-        # Configure Desktop File
-        mkdir -p AppDir/usr/share/applications
-        printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > AppDir/usr/share/applications/SubSyncGui.desktop
         
-        # Add Icon
-        mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
-        wget -q -O AppDir/usr/share/icons/hicolor/128x128/apps/subsync.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
+        cp ../main.py AppDir/main.py
 
     - name: Build AppImage
       run: |
-        # Use linuxdeploy to wrap our manually constructed directory into a self-contained AppImage
+        # Standard linuxdeploy command, no plugins required anymore
         ./linuxdeploy-x86_64.AppImage \
           --appdir AppDir \
           --desktop-file AppDir/usr/share/applications/*.desktop \
