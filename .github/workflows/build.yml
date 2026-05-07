@@ -1,4 +1,4 @@
-name: Build Standalone AppImage
+name: Build Standalone AppImage (Full Proof)
 
 on:
   push:
@@ -13,41 +13,41 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install System Tools
+    - name: Install System Dependencies
       run: |
         sudo apt-get update
-        # Install only dev tools needed to build python wheels locally
-        sudo apt-get install -y python3-dev python3-tk patchelf wget curl unzip xdg-utils build-essential gcc g++
+        # Install dev tools needed for C-extensions (like pyaudio/cchardet)
+        sudo apt-get install -y python3-dev python3-tk python3-pip patchelf wget curl unzip xdg-utils build-essential gcc g++
 
-    - name: Download Linuxdeploy & Plugins (FIXED)
+    - name: Download Linuxdeploy & Python Plugin (FIXED URL)
       run: |
         # 1. Download the core linuxdeploy tool (Continuous build)
         wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
         chmod +x linuxdeploy-x86_64.AppImage
         
-        # 2. Download the FIXED Python Plugin (Moved to niess/linuxdeploy-plugin-python)
-        wget -O linuxdeploy-plugin-python-x86_64.AppImage https://github.com/niess/linuxdeploy-plugin-python/releases/latest/download/linuxdeploy-plugin-python-x86_64.AppImage
+        # 2. Download the FIXED Python Plugin (Pointing to 'continuous' tag to avoid 404)
+        wget -O linuxdeploy-plugin-python-x86_64.AppImage https://github.com/niess/linuxdeploy-plugin-python/releases/download/continuous/linuxdeploy-plugin-python-x86_64.AppImage
         chmod +x linuxdeploy-plugin-python-x86_64.AppImage
         
-        # 3. Move plugin to 'root' so linuxdeploy finds it automatically
+        # 3. Move plugin to 'root' directory so linuxdeploy discovers it automatically
         mkdir -p root
         mv linuxdeploy-plugin-python-x86_64.AppImage root/linuxdeploy-plugin-python-x86_64.AppImage
 
-    - name: Install Python Libraries (Stable Dependencies)
+    - name: Install Python Libraries (Conflict Fixed)
       run: |
-        # Fix for previous dependency errors: Pin NumPy < 2.0 to avoid conflicts
+        # Pin Numpy < 2.0 to prevent conflicts with TensorFlow/PyTorch transitive deps
         pip install "numpy<2.0"
         
-        # Install PyTorch (CPU Only to save space/time and avoid driver errors)
+        # Install CPU-only PyTorch (Standardizes environment and avoids GPU driver errors)
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         
-        # Install the main application and its dependencies
+        # Install the main application and its remaining dependencies
         pip install ffsubsync requests
 
     - name: Download Static FFmpeg (Bundled for Old Debian)
       run: |
         cd /tmp
-        # Download a self-contained static build that works on almost ANY Linux kernel
+        # Download a self-contained static build that includes all codecs
         wget -N https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
         mkdir -p ffmpeg_tmp && tar xf ffmpeg-release-amd64-static.tar.xz -C ffmpeg_tmp --strip-components=1
         mv ffmpeg_tmp/ffmpeg ./bundled_ffmpeg
@@ -58,7 +58,7 @@ jobs:
       run: |
         mkdir -p files/usr/share/applications files/usr/share/icons/hicolor/128x128/apps
         
-        # Create .desktop file using printf (safer than heredoc for single lines)
+        # Create .desktop file using printf (safer for single-line strings)
         printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > files/desktop_file.desktop
         
         # Download icon (ignore errors if network is slow)
@@ -68,8 +68,8 @@ jobs:
       run: |
         mkdir -p AppDir/usr/bin
         
-        # CRITICAL STEP: Inject our bundled FFmpeg into the AppImage internals
-        # This ensures the video engine works even if the target computer has NO ffmpeg installed.
+        # CRITICAL: Inject our bundled FFmpeg into the AppImage internals
+        # This ensures video decoding works on systems lacking ffmpeg libraries
         cp ./bundled_ffmpeg AppDir/usr/bin/ffmpeg
         
         # Run the builder
