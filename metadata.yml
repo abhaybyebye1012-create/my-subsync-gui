@@ -1,0 +1,6 @@
+AppID: com.example.ffsubsync.gui
+AppName: FFSubsyncGUI
+Icon: https://cdn-icons-png.flaticon.com/512/3075/3075908.png
+Version: 1.0.0
+Exec: usr/bin/python3
+ExecArgs: /opt/AppRun.py
