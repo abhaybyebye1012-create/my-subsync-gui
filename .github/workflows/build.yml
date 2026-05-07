@@ -1,4 +1,4 @@
-name: Build FFSubsync AppImage (Stable)
+name: Build FFSubsync AppImage (Full Proof)
 
 on:
   push:
@@ -13,37 +13,38 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install Base System Tools
+    - name: Install System Tools
       run: |
         sudo apt-get update
-        # Only install dev tools, NO ffmpeg via apt yet. We bundle it manually.
-        sudo apt-get install -y python3-dev python3-tk patchelf wget curl unzip xdg-utils
-        pip install --upgrade pip setuptools wheel
+        sudo apt-get install -y python3-dev python3-tk patchelf wget curl unzip xdg-utils build-essential gcc
 
-    - name: Configure Python Environment for Stability
+    - name: Download Linuxdeploy & Plugin (FIXED)
       run: |
-        # Pin Numpy to < 2.0 to avoid compatibility issues with older audio libs
-        pip install "numpy<2.0"
-        
-        # Force CPU-only PyTorch to avoid conflicts and reduce size
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-    - name: Install Main Application Dependencies
-      run: |
-        # Install ffsubsync now that base ML dependencies are locked
-        pip install ffsubsync requests
-        
-        # Install Linuxdeploy tools
+        # 1. Download the core linuxdeploy tool
+        wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
         chmod +x linuxdeploy-x86_64.AppImage
+        
+        # 2. Download the Python Plugin (Required for our Python app)
+        wget -O linuxdeploy-plugin-python-x86_64.AppImage https://github.com/linuxdeploy/plugin-script-python/releases/latest/download/linuxdeploy-plugin-python-x86_64.AppImage
         chmod +x linuxdeploy-plugin-python-x86_64.AppImage
         
-        # Create folder for plugin so it loads automatically
+        # 3. Move the plugin into the 'root' directory so linuxdeploy detects it
         mkdir -p root
         mv linuxdeploy-plugin-python-x86_64.AppImage root/linuxdeploy-plugin-python-x86_64.AppImage
 
+    - name: Install Python Libraries (Dependency Fix)
+      run: |
+        # 1. Force compatible Numpy version to prevent conflicts
+        pip install "numpy<2.0"
+        
+        # 2. Install PyTorch (CPU Only to save space/time)
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        
+        # 3. Install the actual application dependencies
+        pip install ffsubsync requests
+
     - name: Download Static FFmpeg (Bundled)
       run: |
-        # Download self-contained FFmpeg that works on ANY Debian version
         cd /tmp
         wget -N https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
         mkdir -p ffmpeg_tmp && tar xf ffmpeg-release-amd64-static.tar.xz -C ffmpeg_tmp --strip-components=1
@@ -51,23 +52,24 @@ jobs:
         rm -rf ffmpeg_tmp ffmpeg-release-*
         chmod +x ./bundled_ffmpeg
 
-    - name: Prepare Desktop & Icon
+    - name: Prepare Desktop File & Icons
       run: |
         mkdir -p files/usr/share/applications files/usr/share/icons/hicolor/128x128/apps
         
+        # Create desktop file safely
         printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=FFSubsync GUI\nExec=AppRun\nIcon=subsync\nTerminal=false\nCategories=AudioVideo;Utility;\n' > files/desktop_file.desktop
         
+        # Download icon (ignore error if download fails)
         wget -q -O files/icon.png "https://cdn-icons-png.flaticon.com/512/3075/3075908.png" || true
 
     - name: Build AppImage
       run: |
         mkdir -p AppDir/usr/bin
         
-        # CRITICAL: Inject our static FFmpeg into the AppImage
+        # CRITICAL: Inject our bundled FFmpeg into the AppImage internals
         cp ./bundled_ffmpeg AppDir/usr/bin/ffmpeg
-        chmod +x AppDir/usr/bin/ffmpeg
-
-        # Build the AppImage
+        
+        # Run the builder
         ./linuxdeploy-x86_64.AppImage \
           --appdir AppDir \
           --executable main.py \
@@ -76,7 +78,7 @@ jobs:
           --plugin python \
           --output appimage
 
-    - name: Upload Artifacts
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: ffsubsync-gui-linux
