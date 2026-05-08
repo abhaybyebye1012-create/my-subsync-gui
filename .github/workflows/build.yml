@@ -48,11 +48,19 @@ jobs:
         ${ENV_PREFIX}/bin/python -m pip install --upgrade pip setuptools wheel
         
         # Install dependencies
-        # Note: Added 'scikit-learn' which ffsubsync relies on for the alignment algorithm
-        ${ENV_PREFIX}/bin/python -m pip install "numpy<2.0" torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        
-        # 👇 FIXED: Added 'subsync' to the end of this line to fix the command-line error
-        ${ENV_PREFIX}/bin/python -m pip install scikit-learn ffsubsync requests pysubs2 tqdm subsync
+        # Note: 
+        # 1. Removed 'tensorflow' to resolve the dependency conflict.
+        # 2. Added 'subsync' explicitly to ensure the command-line interface is available.
+        # 3. Kept 'numpy<2.0' for maximum compatibility with scikit-learn.
+        ${ENV_PREFIX}/bin/python -m pip install \
+            "numpy<2.0" \
+            torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu \
+            scikit-learn \
+            ffsubsync \
+            subsync \
+            pysubs2 \
+            tqdm \
+            requests
 
     - name: Download & Bundle Static FFmpeg
       run: |
@@ -105,7 +113,6 @@ jobs:
         # Execute the app
         exec "$SCRIPT_DIR/envs/myenv/bin/python" "$SCRIPT_DIR/main.py" "$@"
         EOF
-        # FIXED: Changed "$APPRun" to "$APP_DIR/AppRun"
         chmod +x "$APP_DIR/AppRun"
 
     - name: Build AppImage (FIXED ARCHITECTURE ERROR)
