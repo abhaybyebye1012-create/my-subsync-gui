@@ -35,7 +35,7 @@ jobs:
         bash miniconda.sh -b -u -p "${{ github.workspace }}/AppDir/miniconda3"
         rm miniconda.sh
 
-    - name: Create Isolated Environment & Install Dependencies (FIXED PIP)
+    - name: Create Isolated Environment & Install Dependencies
       run: |
         CONDA_INSTALL="${{ github.workspace }}/AppDir/miniconda3"
         ENV_PREFIX="${{ github.workspace }}/AppDir/envs/myenv"
@@ -50,7 +50,9 @@ jobs:
         # Install dependencies
         # Note: Added 'scikit-learn' which ffsubsync relies on for the alignment algorithm
         ${ENV_PREFIX}/bin/python -m pip install "numpy<2.0" torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        ${ENV_PREFIX}/bin/python -m pip install scikit-learn ffsubsync requests pysubs2 tqdm
+        
+        # 👇 FIXED: Added 'subsync' to the end of this line to fix the command-line error
+        ${ENV_PREFIX}/bin/python -m pip install scikit-learn ffsubsync requests pysubs2 tqdm subsync
 
     - name: Download & Bundle Static FFmpeg
       run: |
@@ -103,6 +105,7 @@ jobs:
         # Execute the app
         exec "$SCRIPT_DIR/envs/myenv/bin/python" "$SCRIPT_DIR/main.py" "$@"
         EOF
+        # FIXED: Changed "$APPRun" to "$APP_DIR/AppRun"
         chmod +x "$APP_DIR/AppRun"
 
     - name: Build AppImage (FIXED ARCHITECTURE ERROR)
